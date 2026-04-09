@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import protobuf from 'protobufjs';
+  import { datapointStore, playbackState } from '$lib/stores/datapoints';
 
   const FEED_URL = 'https://svc.metrotransit.org/mtgtfs/vehiclepositions.pb';
   const GTFS_REALTIME_PROTO = `syntax = "proto2";
@@ -115,9 +116,6 @@ enum OccupancyStatus {
 
   let canvas;
   let ctx;
-  let vehicles = new Map();
-  let totalPoints = 0;
-  let vehicleCount = 0;
   let shouldFade = false;
   let loadingVisible = true;
   let statusMessage = 'Fetching live transit data...';
@@ -173,69 +171,77 @@ enum OccupancyStatus {
     return color;
   }
 
-  function clearCanvas() {
+  function clearCanvasSurface() {
     if (!ctx) {
       return;
     }
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    vehicles = new Map();
-    totalPoints = 0;
   }
 
-  function drawVehicles(vehicleList) {
-    if (!ctx) {
+  function renderPlayback(playback) {
+    if (!ctx || !canvas) {
       return;
     }
+
+    clearCanvasSurface();
 
     if (shouldFade) {
       ctx.fillStyle = 'rgba(5, 5, 5, 0.08)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
 
-    for (const vehicle of vehicleList) {
-      if (!Number.isFinite(vehicle.latitude) || !Number.isFinite(vehicle.longitude)) {
-        continue;
-      }
+    if (!playback.historyLength || playback.playbackIndex < 0) {
+      return;
+    }
 
-      const pos = project(vehicle.latitude, vehicle.longitude);
-      const trailKey = vehicle.vehicle_id || vehicle.id || vehicle.trip_id;
-      const baseColor = colorMap[vehicle.route_id] || colorMap.DEFAULT;
+    const previousPositions = new Map();
+    const snapshots = playback.history.slice(0, playback.playbackIndex + 1);
 
-      if (vehicles.has(trailKey)) {
-        const lastPos = vehicles.get(trailKey);
-
-        if (!isReasonableJump(lastPos, pos)) {
-          vehicles.set(trailKey, pos);
+    for (const snapshot of snapshots) {
+      for (const vehicle of snapshot.vehicles) {
+        if (!Number.isFinite(vehicle.latitude) || !Number.isFinite(vehicle.longitude)) {
           continue;
         }
 
-        ctx.beginPath();
-        ctx.moveTo(lastPos.x, lastPos.y);
-        ctx.lineTo(pos.x, pos.y);
-        ctx.strokeStyle = baseColor;
-        ctx.lineWidth = 2;
-        ctx.lineCap = 'round';
-        ctx.stroke();
+        const pos = project(vehicle.latitude, vehicle.longitude);
+        const trailKey = vehicle.vehicle_id || vehicle.id || vehicle.trip_id;
+        const baseColor = colorMap[vehicle.route_id] || colorMap.DEFAULT;
 
-        ctx.beginPath();
-        ctx.moveTo(lastPos.x, lastPos.y);
-        ctx.lineTo(pos.x, pos.y);
-        ctx.strokeStyle = toRgba(baseColor, 0.3);
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = baseColor;
-        ctx.lineWidth = 4;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-      } else {
-        ctx.fillStyle = baseColor;
-        ctx.beginPath();
-        ctx.arc(pos.x, pos.y, 2, 0, Math.PI * 2);
-        ctx.fill();
+        if (previousPositions.has(trailKey)) {
+          const lastPos = previousPositions.get(trailKey);
+
+          if (!isReasonableJump(lastPos, pos)) {
+            previousPositions.set(trailKey, pos);
+            continue;
+          }
+
+          ctx.beginPath();
+          ctx.moveTo(lastPos.x, lastPos.y);
+          ctx.lineTo(pos.x, pos.y);
+          ctx.strokeStyle = baseColor;
+          ctx.lineWidth = 2;
+          ctx.lineCap = 'round';
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.moveTo(lastPos.x, lastPos.y);
+          ctx.lineTo(pos.x, pos.y);
+          ctx.strokeStyle = toRgba(baseColor, 0.3);
+          ctx.shadowBlur = 10;
+          ctx.shadowColor = baseColor;
+          ctx.lineWidth = 4;
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+        } else {
+          ctx.fillStyle = baseColor;
+          ctx.beginPath();
+          ctx.arc(pos.x, pos.y, 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        previousPositions.set(trailKey, pos);
       }
-
-      vehicles.set(trailKey, pos);
-      totalPoints += 1;
     }
   }
 
@@ -261,8 +267,12 @@ enum OccupancyStatus {
           longitude: entity.vehicle.position.longitude
         }));
 
-      vehicleCount = vehicleList.length;
-      drawVehicles(vehicleList);
+      datapointStore.append({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        createdAt: Date.now(),
+        pointCount: vehicleList.length,
+        vehicles: vehicleList
+      });
 
       if (loadingVisible) {
         loadingVisible = false;
@@ -279,12 +289,23 @@ enum OccupancyStatus {
     shouldFade = !shouldFade;
   }
 
+  function clearDatapoints() {
+    datapointStore.clear();
+    statusMessage = 'Datapoints cleared.';
+  }
+
+  $: if (ctx) {
+    shouldFade;
+    renderPlayback($playbackState);
+  }
+
   onMount(() => {
     ctx = canvas.getContext('2d');
     resizeCanvas();
 
     const handleResize = () => {
       resizeCanvas();
+      renderPlayback($playbackState);
     };
 
     window.addEventListener('resize', handleResize);
@@ -320,20 +341,51 @@ enum OccupancyStatus {
     <header class="header">
       <p class="eyebrow">Twin Cities Real-time Transit Flow</p>
       <h1>Metro Traces</h1>
-      <p class="subtitle">{statusMessage}</p>
+      <p class="subtitle">
+        {$playbackState.historyLength > 0 && !$playbackState.isAtLatest
+          ? `Viewing snapshot ${$playbackState.playbackIndex + 1} of ${$playbackState.historyLength}`
+          : statusMessage}
+      </p>
     </header>
 
     <section class="controls">
       <div class="stat-grid">
         <div class="stat-item">
           <span class="stat-label">Active Vehicles</span>
-          <span class="stat-value">{vehicleCount}</span>
+          <span class="stat-value">{$playbackState.currentSnapshot?.vehicles.length ?? 0}</span>
         </div>
         <div class="stat-item">
           <span class="stat-label">Data Points Captured</span>
-          <span class="stat-value">{totalPoints.toLocaleString()}</span>
+          <span class="stat-value">{$playbackState.renderedPointCount.toLocaleString()}</span>
         </div>
       </div>
+
+      <div class="playback-row">
+        <button class="btn secondary" on:click={() => datapointStore.rewind()} disabled={$playbackState.playbackIndex <= 0}>
+          Rewind
+        </button>
+        <button class="btn secondary" on:click={() => datapointStore.fastForward()} disabled={$playbackState.isAtLatest}>
+          Fast Forward
+        </button>
+        <button class="btn secondary" on:click={() => datapointStore.goLatest()} disabled={$playbackState.isAtLatest}>
+          Live
+        </button>
+      </div>
+
+      {#if $playbackState.historyLength > 0}
+        <div class="scrubber-container">
+          <input
+            type="range"
+            class="scrubber"
+            min="0"
+            max={$playbackState.historyLength - 1}
+            value={$playbackState.playbackIndex}
+            on:input={(e) => datapointStore.seek(parseInt(e.target.value))}
+            aria-label="Timeline scrubber"
+          />
+          <span class="scrubber-label">{$playbackState.playbackIndex + 1} / {$playbackState.historyLength}</span>
+        </div>
+      {/if}
 
       <div class="legend">
         <div class="legend-item"><span class="color-dot" style="background:#00fff2"></span><span>METRO Blue Line</span></div>
@@ -343,7 +395,7 @@ enum OccupancyStatus {
         <div class="legend-item"><span class="color-dot" style="background:#ffffff"></span><span>Core Bus Routes</span></div>
       </div>
 
-      <button class="btn" on:click={clearCanvas}>Clear Canvas</button>
+      <button class="btn" on:click={clearDatapoints}>Clear Timeline</button>
       <button class="btn" aria-pressed={shouldFade} on:click={toggleFade}>
         {shouldFade ? 'Disable Persistence' : 'Enable Persistence'}
       </button>
@@ -507,6 +559,109 @@ enum OccupancyStatus {
     transform: translateY(-1px);
     background: rgba(0, 255, 204, 0.12);
     box-shadow: 0 0 16px rgba(0, 255, 204, 0.28);
+  }
+
+  .btn.secondary {
+    background: rgba(255, 255, 255, 0.04);
+    color: #eef3f7;
+    border-color: rgba(255, 255, 255, 0.16);
+  }
+
+  .btn:disabled {
+    opacity: 0.42;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+  }
+
+  .playback-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.55rem;
+    margin-top: 1rem;
+  }
+
+  .scrubber-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 1rem;
+  }
+
+  .scrubber {
+    width: 100%;
+    height: 5px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+    cursor: pointer;
+  }
+
+  .scrubber::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #00ffcc;
+    cursor: pointer;
+    box-shadow: 0 0 12px rgba(0, 255, 204, 0.6);
+    transition: box-shadow 140ms ease, transform 140ms ease;
+  }
+
+  .scrubber::-webkit-slider-thumb:hover {
+    box-shadow: 0 0 20px rgba(0, 255, 204, 0.8);
+    transform: scale(1.2);
+  }
+
+  .scrubber::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #00ffcc;
+    cursor: pointer;
+    border: none;
+    box-shadow: 0 0 12px rgba(0, 255, 204, 0.6);
+    transition: box-shadow 140ms ease, transform 140ms ease;
+  }
+
+  .scrubber::-moz-range-thumb:hover {
+    box-shadow: 0 0 20px rgba(0, 255, 204, 0.8);
+    transform: scale(1.2);
+  }
+
+  .scrubber::-webkit-slider-runnable-track {
+    background: linear-gradient(
+      to right,
+      rgba(0, 255, 204, 0.3) 0%,
+      rgba(0, 255, 204, 0.3) calc(100% * var(--value, 0) / var(--max, 100)),
+      rgba(255, 255, 255, 0.08) calc(100% * var(--value, 0) / var(--max, 100)),
+      rgba(255, 255, 255, 0.08) 100%
+    );
+    border-radius: 4px;
+    height: 5px;
+  }
+
+  .scrubber::-moz-range-track {
+    background: transparent;
+    border: none;
+  }
+
+  .scrubber::-moz-range-progress {
+    background: rgba(0, 255, 204, 0.3);
+    border-radius: 4px;
+    height: 5px;
+  }
+
+  .scrubber-label {
+    display: block;
+    font-size: 0.7rem;
+    color: rgba(238, 243, 247, 0.6);
+    letter-spacing: 0.08em;
+    text-align: center;
+    text-transform: uppercase;
   }
 
   .loading-overlay {
