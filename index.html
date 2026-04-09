@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Metro Traces | Digital Art</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="loading-overlay">
+        <div class="loader"></div>
+        <div class="subtitle">Fetching live transit data...</div>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="trace-canvas"></canvas>
+    </div>
+
+    <div id="ui-layer">
+        <header id="header">
+            <h1>Metro Traces</h1>
+            <div class="subtitle">Twin Cities Real-time Transit Flow</div>
+        </header>
+
+        <section id="controls">
+            <div class="stat-item">
+                <span class="stat-label">Active Vehicles</span>
+                <span id="vehicle-count" class="stat-value">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Data Points Captured</span>
+                <span id="point-count" class="stat-value">0</span>
+            </div>
+
+            <div id="legend">
+                <div class="legend-item">
+                    <span class="color-dot" style="background-color: #00fff2; color: #00fff2;"></span>
+                    <span>METRO Blue Line</span>
+                </div>
+                <div class="legend-item">
+                    <span class="color-dot" style="background-color: #00ff00; color: #00ff00;"></span>
+                    <span>METRO Green Line</span>
+                </div>
+                <div class="legend-item">
+                    <span class="color-dot" style="background-color: #ff4d00; color: #ff4d00;"></span>
+                    <span>METRO Orange Line</span>
+                </div>
+                <div class="legend-item">
+                    <span class="color-dot" style="background-color: #ff00ff; color: #ff00ff;"></span>
+                    <span>METRO Red Line</span>
+                </div>
+                <div class="legend-item">
+                    <span class="color-dot" style="background-color: #ffffff; color: #ffffff;"></span>
+                    <span>Core Bus Routes</span>
+                </div>
+            </div>
+
+            <button id="clear-btn" class="btn">Clear Canvas</button>
+            <button id="toggle-fade" class="btn">Toggle Persistence</button>
+        </section>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
